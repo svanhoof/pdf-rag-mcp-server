@@ -19,7 +19,10 @@ from urllib.parse import quote
 
 # Load environment variables from .env file (if present)
 from dotenv import load_dotenv
-load_dotenv()  # Loads from .env in current directory or parent directories
+# Look for .env in current directory or project root (one level up from backend/)
+_project_root = Path(__file__).resolve().parents[2]
+load_dotenv(_project_root / ".env")
+load_dotenv()  # Also try current directory as fallback
 
 # Third-party library imports
 import fitz  # PyMuPDF

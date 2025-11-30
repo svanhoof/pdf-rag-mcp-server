@@ -185,6 +185,9 @@ class LanceVectorBackend(BaseVectorBackend):
                     logger.error("Lance table could not be initialized for add_documents call")
                     return False
             self.table.add(records)
+            # Reopen the table to ensure subsequent searches see the new data
+            self.table = self._open_table()
+            logger.info("Added %d chunks to LanceDB and refreshed table", len(chunks))
             return True
         except Exception as exc:  # noqa: BLE001
             logger.error("Error adding documents to LanceDB: %s", exc, exc_info=True)
@@ -197,9 +200,8 @@ class LanceVectorBackend(BaseVectorBackend):
         filter_criteria: Optional[Dict[str, Any]] = None,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        # Try to open table if it was created after init
-        if self.table is None:
-            self.table = self._open_table()
+        # Always reopen the table to see the latest data (handles multi-instance scenarios)
+        self.table = self._open_table()
         if self.table is None or self.get_document_count() == 0:
             return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
@@ -295,6 +297,8 @@ class LanceVectorBackend(BaseVectorBackend):
             return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
     def get_document_count(self) -> int:
+        # Reopen table to get accurate count (handles multi-instance scenarios)
+        self.table = self._open_table()
         if self.table is None:
             return 0
         try:
@@ -338,6 +342,8 @@ class LanceVectorBackend(BaseVectorBackend):
                 expr = self._delete_where_expr(filter)
                 if expr:
                     self.table.delete(where=expr)
+                # Reopen the table to ensure subsequent operations see the deletion
+                self.table = self._open_table()
                 return True
             if ids:
                 id_list = list(ids)
@@ -349,6 +355,8 @@ class LanceVectorBackend(BaseVectorBackend):
                     quoted_items.append(f"'{safe_item}'")
                 quoted = ",".join(quoted_items)
                 self.table.delete(where=f"id in ({quoted})")
+                # Reopen the table to ensure subsequent operations see the deletion
+                self.table = self._open_table()
                 return True
             logger.warning("Lance delete called without filter or ids")
             return False
@@ -424,6 +432,9 @@ class LanceVectorBackend(BaseVectorBackend):
 
             # Re-add with updated metadata
             self.table.add(updated_records)
+
+            # Reopen the table to ensure subsequent searches see the updated data
+            self.table = self._open_table()
             logger.info("Successfully updated metadata for pdf_id=%s", pdf_id)
             return True
 
