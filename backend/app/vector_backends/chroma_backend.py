@@ -298,6 +298,52 @@ class ChromaVectorBackend(BaseVectorBackend):
             logger.error("Chroma delete failed: %s", exc, exc_info=True)
             return False
 
+    def update_document_metadata(
+        self,
+        pdf_id: int,
+        publication_year: Optional[int] = None,
+        authors: Optional[List[str]] = None,
+        document_type: Optional[str] = None,
+    ) -> bool:
+        """Update metadata fields on all chunks belonging to a document.
+
+        Chroma supports in-place metadata updates via the update method.
+        """
+        try:
+            # Get all chunks for this pdf_id
+            results = self.collection.get(where={"pdf_id": pdf_id})
+            doc_ids = results.get("ids", [])
+            metadatas = results.get("metadatas", [])
+
+            if not doc_ids:
+                logger.info("No chunks found for pdf_id=%s, nothing to update", pdf_id)
+                return True
+
+            logger.info("Updating metadata for %d chunks (pdf_id=%s)", len(doc_ids), pdf_id)
+
+            # Update metadata for each chunk
+            updated_metadatas = []
+            for meta in metadatas:
+                updated_meta = dict(meta) if meta else {}
+                updated_meta["publication_year"] = publication_year
+                updated_meta["authors"] = authors
+                updated_meta["document_type"] = document_type
+                updated_metadatas.append(updated_meta)
+
+            # Update in batches
+            for i in range(0, len(doc_ids), 100):
+                batch_ids = doc_ids[i : i + 100]
+                batch_metas = updated_metadatas[i : i + 100]
+                self.collection.update(ids=batch_ids, metadatas=batch_metas)
+
+            self._persist_if_available()
+            logger.info("Successfully updated metadata for pdf_id=%s", pdf_id)
+            return True
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Error updating metadata in Chroma: %s", exc, exc_info=True)
+            return False
+
     def rebuild_from_markdown(self) -> None:
         if self.collection.count() > 0:
             logger.info("Chroma store already populated; skipping rebuild")
@@ -369,6 +415,9 @@ class ChromaVectorBackend(BaseVectorBackend):
                                 "index": chunk_counter,
                                 "length": len(chunk),
                                 "timestamp": time.time(),
+                                # Document metadata from DB
+                                "publication_year": doc.publication_year or 0,
+                                "document_type": doc.document_type or "",
                             }
                         )
                         chunk_counter += 1

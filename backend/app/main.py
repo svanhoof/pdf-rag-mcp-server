@@ -8,11 +8,14 @@ import asyncio
 import io
 import logging
 import os
+import shutil
 import uuid
 import datetime as dt
 from difflib import SequenceMatcher
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional, Literal
+from urllib.parse import quote
 
 # Third-party library imports
 import fitz  # PyMuPDF
@@ -40,7 +43,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 
 # Local application/library imports
-from app.database import PDFDocument, PDFMarkdownPage, SessionLocal, get_db
+from app.database import DOCUMENT_TYPES, PDFDocument, PDFMarkdownPage, SessionLocal, get_db
 from app.pdf_processor import PDFProcessor, PROCESSING_STATUS
 from app.pdf_watcher import PDFDirectoryWatcher
 from app.vector_store import VectorStore
@@ -150,6 +153,28 @@ class ReparseRequest(BaseModel):
     filenames: list[str] | None = Field(
         default=None,
         description="Exact filenames to reprocess when mode is 'selected'.",
+    )
+
+    class Config:
+        extra = "forbid"
+
+
+class DocumentMetadataUpdate(BaseModel):
+    """Payload for updating document metadata."""
+
+    publication_year: int | None = Field(
+        default=None,
+        ge=1900,
+        le=2100,
+        description="Year of publication (1900-2100).",
+    )
+    authors: list[str] | None = Field(
+        default=None,
+        description="List of author names.",
+    )
+    document_type: str | None = Field(
+        default=None,
+        description=f"Document type. One of: {', '.join(DOCUMENT_TYPES)}.",
     )
 
     class Config:
@@ -307,6 +332,9 @@ app.add_middleware(
 os.makedirs("./uploads", exist_ok=True)
 # Ensure static files directory exists
 os.makedirs("./static", exist_ok=True)
+# Ensure archive directory exists for original PDF preservation
+ARCHIVE_DIR = os.getenv("PDF_RAG_ARCHIVE_DIR", "./archive")
+os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 # Store active MCP sessions
 _active_mcp_sessions: dict[str, dict[str, object]] = {}
@@ -522,6 +550,23 @@ async def not_found_handler(request, exc):
     """If the route does not exist, return the frontend application to let the frontend handle routing"""
     return FileResponse("static/index.html")
 
+def _get_unique_archive_path(original_filename: str) -> str:
+    """Generate a unique archive path, adding numeric suffix if file exists."""
+    base_path = Path(ARCHIVE_DIR) / original_filename
+    if not base_path.exists():
+        return str(base_path)
+
+    # File exists, add numeric suffix
+    stem = base_path.stem
+    suffix = base_path.suffix
+    counter = 1
+    while True:
+        new_path = Path(ARCHIVE_DIR) / f"{stem}({counter}){suffix}"
+        if not new_path.exists():
+            return str(new_path)
+        counter += 1
+
+
 @app.post("/api/upload")
 async def upload_pdf(
     background_tasks: BackgroundTasks,
@@ -529,27 +574,27 @@ async def upload_pdf(
     db: Session = Depends(get_db)
 ):
     """Upload and process PDF file.
-    
+
     Args:
         background_tasks: Background task manager.
         file: Uploaded PDF file.
         db: Database session.
-        
+
     Returns:
         Dictionary containing upload status information.
-        
+
     Raises:
         HTTPException: If file is not in PDF format.
     """
     # Validate file type
     if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
-    
+
     # Check if file already exists
     existing_doc = db.query(PDFDocument).filter(
         PDFDocument.filename == file.filename
     ).first()
-    
+
     if existing_doc:
         if existing_doc.processed:
             return {"message": "File already processed", "id": existing_doc.id}
@@ -558,17 +603,21 @@ async def upload_pdf(
                 "message": "File is currently being processed",
                 "id": existing_doc.id
             }
-    
+
     # Generate unique filename
     unique_filename = f"{uuid.uuid4()}_{file.filename}"
     file_path = f"./uploads/{unique_filename}"
-    
+
     # Save file
     with open(file_path, "wb") as f:
         file_content = await file.read()
         f.write(file_content)
         file_size = len(file_content)
-    
+
+    # Copy to archive folder with original filename
+    archive_path = _get_unique_archive_path(file.filename)
+    shutil.copy2(file_path, archive_path)
+
     # Create database record
     pdf_doc = PDFDocument(
         filename=file.filename,
@@ -576,12 +625,13 @@ async def upload_pdf(
         file_size=file_size,
         processed=False,
         processing=True,
-        progress=0.0
+        progress=0.0,
+        archive_path=archive_path,
     )
     db.add(pdf_doc)
     db.commit()
     db.refresh(pdf_doc)
-    
+
     # Process PDF in background
     PROCESSING_STATUS[file.filename] = {"progress": 0, "status": "Queued"}
     background_tasks.add_task(
@@ -590,7 +640,7 @@ async def upload_pdf(
         file_path,
         file.filename
     )
-    
+
     return {
         "message": "PDF uploaded and queued for processing",
         "id": pdf_doc.id,
@@ -618,10 +668,10 @@ async def _process_pdf_background(pdf_id: int, file_path: str, filename: str):
 @app.get("/api/documents")
 async def get_documents(db: Session = Depends(get_db)):
     """Get status of all PDF documents.
-    
+
     Args:
         db: Database session.
-        
+
     Returns:
         List containing information for all documents.
     """
@@ -641,6 +691,9 @@ async def get_documents(db: Session = Depends(get_db)):
             "blacklisted": doc.blacklisted,
             "blacklisted_at": doc.blacklisted_at,
             "blacklist_reason": doc.blacklist_reason,
+            "publication_year": doc.publication_year,
+            "authors": doc.authors,
+            "document_type": doc.document_type,
         }
         for doc in docs
     ]
@@ -649,21 +702,21 @@ async def get_documents(db: Session = Depends(get_db)):
 @app.get("/api/documents/{doc_id}")
 async def get_document(doc_id: int, db: Session = Depends(get_db)):
     """Get detailed information for a single PDF document.
-    
+
     Args:
         doc_id: Document ID.
         db: Database session.
-        
+
     Returns:
         Dictionary containing detailed document information.
-        
+
     Raises:
         HTTPException: If document is not found.
     """
     doc = db.query(PDFDocument).filter(PDFDocument.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    
+
     return {
         "id": doc.id,
         "filename": doc.filename,
@@ -678,6 +731,9 @@ async def get_document(doc_id: int, db: Session = Depends(get_db)):
         "blacklisted": doc.blacklisted,
         "blacklisted_at": doc.blacklisted_at,
         "blacklist_reason": doc.blacklist_reason,
+        "publication_year": doc.publication_year,
+        "authors": doc.authors,
+        "document_type": doc.document_type,
         "status": PROCESSING_STATUS.get(
             doc.filename,
             {"progress": doc.progress, "status": "Unknown"}
@@ -685,10 +741,89 @@ async def get_document(doc_id: int, db: Session = Depends(get_db)):
     }
 
 
+@app.patch("/api/documents/{doc_id}/metadata")
+async def update_document_metadata(
+    doc_id: int,
+    metadata: DocumentMetadataUpdate,
+    db: Session = Depends(get_db),
+):
+    """Update document metadata fields.
+
+    Args:
+        doc_id: Document ID.
+        metadata: Metadata update payload.
+        db: Database session.
+
+    Returns:
+        Dictionary containing updated document information.
+
+    Raises:
+        HTTPException: If document is not found or validation fails.
+    """
+    doc = db.query(PDFDocument).filter(PDFDocument.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Validate document_type if provided
+    if metadata.document_type is not None and metadata.document_type not in DOCUMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid document_type. Must be one of: {', '.join(DOCUMENT_TYPES)}",
+        )
+
+    # Validate authors if provided (must be list of non-empty strings)
+    if metadata.authors is not None:
+        if not isinstance(metadata.authors, list):
+            raise HTTPException(status_code=400, detail="authors must be a list of strings")
+        for author in metadata.authors:
+            if not isinstance(author, str) or not author.strip():
+                raise HTTPException(status_code=400, detail="Each author must be a non-empty string")
+        # Clean up whitespace
+        metadata.authors = [a.strip() for a in metadata.authors if a.strip()]
+
+    # Update fields that are provided (not None)
+    if metadata.publication_year is not None:
+        doc.publication_year = metadata.publication_year
+    if metadata.authors is not None:
+        doc.authors = metadata.authors
+    if metadata.document_type is not None:
+        doc.document_type = metadata.document_type
+
+    db.commit()
+    db.refresh(doc)
+
+    # Propagate metadata to vector store chunks
+    vector_store.update_document_metadata(
+        pdf_id=doc.id,
+        publication_year=doc.publication_year,
+        authors=doc.authors,
+        document_type=doc.document_type,
+    )
+
+    return {
+        "id": doc.id,
+        "filename": doc.filename,
+        "uploaded_at": doc.uploaded_at,
+        "file_size": doc.file_size,
+        "processed": doc.processed,
+        "processing": doc.processing,
+        "page_count": doc.page_count,
+        "chunks_count": doc.chunks_count,
+        "progress": doc.progress,
+        "error": doc.error,
+        "blacklisted": doc.blacklisted,
+        "blacklisted_at": doc.blacklisted_at,
+        "blacklist_reason": doc.blacklist_reason,
+        "publication_year": doc.publication_year,
+        "authors": doc.authors,
+        "document_type": doc.document_type,
+    }
+
+
 @app.delete("/api/documents/{doc_id}")
 async def delete_document(doc_id: int, db: Session = Depends(get_db)):
     """Delete a PDF document.
-    
+
     Args:
         doc_id: Document ID.
         db: Database session.
@@ -747,6 +882,34 @@ async def delete_document(doc_id: int, db: Session = Depends(get_db)):
     return {"message": f"Document {doc.filename} deleted successfully"}
 
 
+@app.get("/api/archive/{doc_id}")
+async def download_archived_pdf(doc_id: int, db: Session = Depends(get_db)):
+    """Download the archived original PDF file.
+
+    Args:
+        doc_id: Document ID.
+        db: Database session.
+
+    Returns:
+        FileResponse streaming the PDF file.
+
+    Raises:
+        HTTPException: If document not found or archive file missing.
+    """
+    doc = db.query(PDFDocument).filter(PDFDocument.id == doc_id).first()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if not doc.archive_path or not os.path.exists(doc.archive_path):
+        raise HTTPException(status_code=404, detail="Archived file not found")
+
+    return FileResponse(
+        path=doc.archive_path,
+        filename=doc.filename,
+        media_type="application/pdf",
+    )
+
+
 @app.get("/api/connections")
 async def get_connection_snapshot():
     """Return the latest connection snapshot for dashboard clients."""
@@ -785,7 +948,69 @@ async def websocket_endpoint(websocket: WebSocket):
         await _broadcast_connection_snapshot(force=True)
 
 
-def _format_vector_search_results(query: str, limit: int, offset: int):
+def _build_filter_criteria(
+    publication_year: Optional[int] = None,
+    document_type: Optional[str] = None,
+    author: Optional[str] = None,
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+    document_types: Optional[list[str]] = None,
+) -> Optional[str]:
+    """Build a SQL-like filter expression for vector search.
+
+    Args:
+        publication_year: Filter by exact publication year.
+        document_type: Filter by single document type.
+        author: Filter by author name (partial match in authors list).
+        year_start: Minimum publication year (inclusive).
+        year_end: Maximum publication year (inclusive).
+        document_types: List of document types to include (OR logic).
+
+    Returns:
+        A SQL-like where clause string, or None if no filters.
+    """
+    clauses = []
+
+    # Year range takes precedence over exact year
+    if year_start is not None or year_end is not None:
+        if year_start is not None:
+            clauses.append(f"publication_year >= {year_start}")
+        if year_end is not None:
+            clauses.append(f"publication_year <= {year_end}")
+    elif publication_year is not None:
+        clauses.append(f"publication_year == {publication_year}")
+
+    # Multiple document types takes precedence over single type
+    if document_types and len(document_types) > 0:
+        type_conditions = []
+        for dt in document_types:
+            escaped = dt.replace("'", "''")
+            type_conditions.append(f"document_type == '{escaped}'")
+        if len(type_conditions) == 1:
+            clauses.append(type_conditions[0])
+        else:
+            clauses.append(f"({' OR '.join(type_conditions)})")
+    elif document_type is not None:
+        escaped = document_type.replace("'", "''")
+        clauses.append(f"document_type == '{escaped}'")
+
+    # Author filtering: requires post-filtering since authors is a list field
+    # The 'author' parameter is handled separately in _format_vector_search_results
+
+    return " AND ".join(clauses) if clauses else None
+
+
+def _format_vector_search_results(
+    query: str,
+    limit: int,
+    offset: int,
+    publication_year: Optional[int] = None,
+    document_type: Optional[str] = None,
+    author: Optional[str] = None,
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+    document_types: Optional[list[str]] = None,
+):
     """Execute a vector search and return formatted results with paging metadata."""
     if not query or not query.strip():
         raise HTTPException(status_code=400, detail="Query string must be provided")
@@ -793,20 +1018,33 @@ def _format_vector_search_results(query: str, limit: int, offset: int):
     limit_sanitized = max(1, min(int(limit or 1), 50))
     offset_sanitized = max(0, int(offset or 0))
 
+    # Build filter criteria (author filtering done as post-filter below)
+    filter_criteria = _build_filter_criteria(
+        publication_year=publication_year,
+        document_type=document_type,
+        year_start=year_start,
+        year_end=year_end,
+        document_types=document_types,
+    )
+
     logger.info(
-        "Vector search request received: query='%s', limit=%s, offset=%s",
+        "Vector search request received: query='%s', limit=%s, offset=%s, filter=%s",
         query,
         limit_sanitized,
         offset_sanitized,
+        filter_criteria,
     )
 
     doc_count = vector_store.get_document_count()
     logger.info("Current vector database document count: %s", doc_count)
 
     query_embedding = embedding_model.encode(query)
+    # If author filter is active, fetch more results to allow for post-filtering
+    fetch_limit = limit_sanitized * 3 if author else limit_sanitized
     results = vector_store.search(
         query_embedding,
-        n_results=limit_sanitized,
+        n_results=fetch_limit,
+        filter_criteria=filter_criteria,
         offset=offset_sanitized,
     )
 
@@ -843,15 +1081,38 @@ def _format_vector_search_results(query: str, limit: int, offset: int):
 
             filename = "Unknown document"
             blacklisted = False
+            has_archive = False
             if pdf_id:
                 pdf_doc = db.query(PDFDocument).filter(PDFDocument.id == pdf_id).first()
                 if pdf_doc:
                     filename = pdf_doc.filename
                     blacklisted = pdf_doc.blacklisted
+                    has_archive = bool(pdf_doc.archive_path and os.path.exists(pdf_doc.archive_path))
 
             if blacklisted:
                 logger.debug("Skipping blacklisted document %s (pdf_id=%s)", filename, pdf_id)
                 continue
+
+            # Author post-filtering: check if any author matches the filter
+            if author:
+                chunk_authors = meta.get("authors", [])
+                if not chunk_authors:
+                    chunk_authors = []
+                elif isinstance(chunk_authors, str):
+                    # Handle case where authors might be stored as string
+                    import json as _json
+                    try:
+                        chunk_authors = _json.loads(chunk_authors)
+                    except (ValueError, TypeError):
+                        chunk_authors = [chunk_authors]
+                author_lower = author.lower()
+                author_match = any(author_lower in a.lower() for a in chunk_authors if isinstance(a, str))
+                if not author_match:
+                    continue
+
+            # Stop collecting once we have enough results
+            if len(formatted_results) >= limit_sanitized:
+                break
 
             score_value = None
             candidate_score = scores[index] if index < len(scores) else None
@@ -872,6 +1133,7 @@ def _format_vector_search_results(query: str, limit: int, offset: int):
                 "relevance": score_value,
                 "pdf_id": pdf_id,
                 "filename": filename,
+                "download_url": f"/api/archive/{pdf_id}" if has_archive else None,
             }
             formatted_results.append(result_item)
     finally:
@@ -895,9 +1157,39 @@ async def search_documents(
     q: str = Query(..., min_length=1, description="Search string to query"),
     limit: int = Query(10, ge=1, le=50, description="Maximum number of results to return"),
     offset: int = Query(0, ge=0, description="Offset into the full result set"),
+    publication_year: Optional[int] = Query(None, ge=1900, le=2100, description="Filter by exact publication year"),
+    year_start: Optional[int] = Query(None, ge=1900, le=2100, description="Filter by minimum publication year"),
+    year_end: Optional[int] = Query(None, ge=1900, le=2100, description="Filter by maximum publication year"),
+    document_type: Optional[str] = Query(None, description="Filter by single document type"),
+    document_types: Optional[str] = Query(None, description="Filter by multiple document types (comma-separated)"),
+    author: Optional[str] = Query(None, description="Filter by author name (partial match)"),
 ):
-    """HTTP endpoint for searching the knowledge base with pagination."""
-    payload = _format_vector_search_results(q, limit, offset)
+    """HTTP endpoint for searching the knowledge base with pagination and filters."""
+    # Parse document_types if provided (comma-separated)
+    doc_types_list = None
+    if document_types:
+        doc_types_list = [dt.strip() for dt in document_types.split(",") if dt.strip()]
+        for dt in doc_types_list:
+            if dt not in DOCUMENT_TYPES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid document_type '{dt}'. Must be one of: {', '.join(DOCUMENT_TYPES)}",
+                )
+    elif document_type is not None and document_type not in DOCUMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid document_type. Must be one of: {', '.join(DOCUMENT_TYPES)}",
+        )
+
+    payload = _format_vector_search_results(
+        q, limit, offset,
+        publication_year=publication_year,
+        document_type=document_type,
+        author=author,
+        year_start=year_start,
+        year_end=year_end,
+        document_types=doc_types_list,
+    )
     return payload
 
 
@@ -920,6 +1212,36 @@ async def query_knowledge_base(
         ge=0,
         description="Number of leading matches to skip. Reuse the same query string when advancing the offset. Value has to be a non-negative integer",
     ),
+    publication_year: Optional[int] = Query(
+        None,
+        ge=1900,
+        le=2100,
+        description="Filter results to documents from this exact publication year. Use year_start/year_end for ranges.",
+    ),
+    year_start: Optional[int] = Query(
+        None,
+        ge=1900,
+        le=2100,
+        description="Filter results to documents published on or after this year (inclusive).",
+    ),
+    year_end: Optional[int] = Query(
+        None,
+        ge=1900,
+        le=2100,
+        description="Filter results to documents published on or before this year (inclusive).",
+    ),
+    document_type: Optional[str] = Query(
+        None,
+        description=f"Filter results to documents of this type. Valid values: {', '.join(DOCUMENT_TYPES)}.",
+    ),
+    document_types: Optional[str] = Query(
+        None,
+        description=f"Filter results to documents matching any of these types (comma-separated). Valid values: {', '.join(DOCUMENT_TYPES)}.",
+    ),
+    author: Optional[str] = Query(
+        None,
+        description="Filter results to documents where any author name contains this string (case-insensitive partial match).",
+    ),
 ):
     """Run a similarity search designed for MCP-aware assistants.
 
@@ -931,6 +1253,16 @@ async def query_knowledge_base(
     - `limit` and `offset`: consumed paging parameters so the agent can reason about the window it received.
     - `has_more` and `next_offset`: indicators for when additional pages of results are available.
 
+    Optional filters:
+
+    - `publication_year`: Restrict results to documents published in a specific year.
+    - `year_start` / `year_end`: Restrict results to documents published within a year range (inclusive).
+    - `document_type`: Restrict results to documents of a single type.
+    - `document_types`: Restrict results to documents matching any of the specified types (comma-separated).
+    - `author`: Restrict results to documents where any author name contains the search string.
+
+    Supported document types: paper, handbook, manual, report, other.
+
     Recommended flow for AI clients:
 
     1. Issue an initial call with a conservative `limit` to avoid exceeding the model's context window.
@@ -940,7 +1272,31 @@ async def query_knowledge_base(
     Returns:
         JSON payload ready for LLM consumption, enabling ranked retrieval with provenance metadata and incremental paging.
     """
-    payload = _format_vector_search_results(query, limit, offset)
+    # Parse document_types if provided (comma-separated)
+    doc_types_list = None
+    if document_types:
+        doc_types_list = [dt.strip() for dt in document_types.split(",") if dt.strip()]
+        for dt in doc_types_list:
+            if dt not in DOCUMENT_TYPES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid document_type '{dt}'. Must be one of: {', '.join(DOCUMENT_TYPES)}",
+                )
+    elif document_type is not None and document_type not in DOCUMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid document_type. Must be one of: {', '.join(DOCUMENT_TYPES)}",
+        )
+
+    payload = _format_vector_search_results(
+        query, limit, offset,
+        publication_year=publication_year,
+        document_type=document_type,
+        author=author,
+        year_start=year_start,
+        year_end=year_end,
+        document_types=doc_types_list,
+    )
     return payload
 
 

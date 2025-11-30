@@ -15,7 +15,7 @@ function App() {
         <Router>  
           <Box minH="100vh" bgGradient="linear(to-br, gray.50, gray.100)">  
             <Header />  
-            <Container maxW="container.xl" py={{ base: 6, md: 10 }} px={{ base: 4, md: 8 }}>  
+            <Container maxW="full" py={{ base: 6, md: 10 }} px={{ base: 4, md: 8 }}>  
               <Routes>  
                 <Route path="/" element={<Dashboard />} />  
                 <Route path="/search" element={<Search />} />

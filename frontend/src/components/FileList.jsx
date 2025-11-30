@@ -28,22 +28,34 @@ import {
   useToast,
   Wrap,
   WrapItem,
-} from '@chakra-ui/react';  
-import { FiTrash, FiInfo, FiBookOpen } from 'react-icons/fi';  
-import axios from 'axios';  
-import { formatDistance } from 'date-fns';  
-import ProgressBar from './ProgressBar';  
+} from '@chakra-ui/react';
+import { FiTrash, FiInfo, FiBookOpen, FiEdit } from 'react-icons/fi';
+import axios from 'axios';
+import { formatDistance } from 'date-fns';
+import ProgressBar from './ProgressBar';
 import { fetchDocumentMarkdown } from '../api/documents';
 import ReactMarkdown from 'react-markdown';
+import MetadataEditor from './MetadataEditor';
 
 
-const FileListComponent = ({ documents, onDeleteDocument, showProgress }) => {  
-  const toast = useToast();  
+const FileListComponent = ({ documents, onDeleteDocument, showProgress }) => {
+  const toast = useToast();
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const { isOpen: isMetadataOpen, onOpen: onMetadataOpen, onClose: onMetadataClose } = useDisclosure();
   const [markdownContent, setMarkdownContent] = React.useState(null);
   const [selectedDocument, setSelectedDocument] = React.useState(null);
+  const [metadataDocument, setMetadataDocument] = React.useState(null);
   const [loadingMarkdown, setLoadingMarkdown] = React.useState(false);
   const isMobileLayout = useBreakpointValue({ base: true, md: false });
+
+  const handleEditMetadata = (doc) => {
+    setMetadataDocument(doc);
+    onMetadataOpen();
+  };
+
+  const handleMetadataSave = () => {
+    if (onDeleteDocument) onDeleteDocument(); // Refresh document list
+  };
 
   const handleDelete = async (id, filename) => {  
     try {  
@@ -167,6 +179,14 @@ const FileListComponent = ({ documents, onDeleteDocument, showProgress }) => {
               )}  
               <Td>
                 <HStack spacing={2} justify="flex-end">
+                  <IconButton
+                    icon={<FiEdit />}
+                    aria-label="Edit metadata"
+                    size="sm"
+                    colorScheme="teal"
+                    variant="ghost"
+                    onClick={() => handleEditMetadata(doc)}
+                  />
                   <Button
                     size="sm"
                     leftIcon={<FiBookOpen />}
@@ -177,21 +197,21 @@ const FileListComponent = ({ documents, onDeleteDocument, showProgress }) => {
                   >
                     View Markdown
                   </Button>
-                  <IconButton  
-                    icon={<FiTrash />}  
-                    aria-label="Delete document"  
-                    size="sm"  
-                    colorScheme="red"  
-                    variant="ghost"  
-                    isDisabled={doc.processing}  
-                    onClick={() => handleDelete(doc.id, doc.filename)}  
+                  <IconButton
+                    icon={<FiTrash />}
+                    aria-label="Delete document"
+                    size="sm"
+                    colorScheme="red"
+                    variant="ghost"
+                    isDisabled={doc.processing}
+                    onClick={() => handleDelete(doc.id, doc.filename)}
                   />
                 </HStack>
               </Td>
-            </Tr>  
-          ))}  
-        </Tbody>  
-      </Table>  
+            </Tr>
+          ))}
+        </Tbody>
+      </Table>
     </Box>
   );
 
@@ -239,6 +259,14 @@ const FileListComponent = ({ documents, onDeleteDocument, showProgress }) => {
             <Divider />
 
             <Stack direction={{ base: 'column', sm: 'row' }} spacing={2} justify="space-between">
+              <Button
+                leftIcon={<FiEdit />}
+                variant="solid"
+                colorScheme="teal"
+                onClick={() => handleEditMetadata(doc)}
+              >
+                Edit Metadata
+              </Button>
               <Button
                 leftIcon={<FiBookOpen />}
                 variant="solid"
@@ -300,9 +328,16 @@ const FileListComponent = ({ documents, onDeleteDocument, showProgress }) => {
           </ModalFooter>
         </ModalContent>
       </Modal>
+
+      <MetadataEditor
+        isOpen={isMetadataOpen}
+        onClose={onMetadataClose}
+        document={metadataDocument}
+        onSave={handleMetadataSave}
+      />
     </Box>
-  );  
-};  
+  );
+};
 
 FileListComponent.displayName = 'FileList';
 

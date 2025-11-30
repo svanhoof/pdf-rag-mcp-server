@@ -30,20 +30,20 @@ def build_frontend():
     print("Copying frontend build output to backend static directory...")
     if os.path.exists("frontend/dist"):
         # Clean static directory
-        if os.path.exists("backend/app/static"):
-            for item in os.listdir("backend/app/static"):
-                item_path = os.path.join("backend/app/static", item)
+        if os.path.exists("backend/static"):
+            for item in os.listdir("backend/static"):
+                item_path = os.path.join("backend/static", item)
                 if os.path.isdir(item_path):
                     shutil.rmtree(item_path)
                 else:
                     os.remove(item_path)
         else:
-            os.makedirs("backend/app/static", exist_ok=True)
-            
+            os.makedirs("backend/static", exist_ok=True)
+
         # Copy build output
         for item in os.listdir("frontend/dist"):
             src_path = os.path.join("frontend/dist", item)
-            dst_path = os.path.join("backend/app/static", item)
+            dst_path = os.path.join("backend/static", item)
             if os.path.isdir(src_path):
                 shutil.copytree(src_path, dst_path)
             else:

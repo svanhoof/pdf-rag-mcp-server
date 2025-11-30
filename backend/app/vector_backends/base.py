@@ -56,6 +56,16 @@ class BaseVectorBackend(ABC):
         """Delete vectors by filter or explicit ids."""
 
     @abstractmethod
+    def update_document_metadata(
+        self,
+        pdf_id: int,
+        publication_year: Optional[int] = None,
+        authors: Optional[List[str]] = None,
+        document_type: Optional[str] = None,
+    ) -> bool:
+        """Update metadata fields on all chunks belonging to a document."""
+
+    @abstractmethod
     def rebuild_from_markdown(self) -> None:
         """Rehydrate embeddings from stored markdown pages."""
 

@@ -14,6 +14,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     Integer,
+    JSON,
     String,
     create_engine,
     event,
@@ -63,11 +64,15 @@ def set_sqlite_pragma(dbapi_connection, connection_record):  # noqa: D401
         cursor.close()
 
 
+# Valid document types for metadata
+DOCUMENT_TYPES = ["paper", "handbook", "manual", "report", "other"]
+
+
 class PDFDocument(Base):
     """PDF document data model, used to store document metadata and processing status."""
-    
+
     __tablename__ = "pdf_documents"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, unique=True, index=True)
     file_path = Column(String)
@@ -82,6 +87,11 @@ class PDFDocument(Base):
     blacklisted = Column(Boolean, default=False)
     blacklisted_at = Column(DateTime, nullable=True)
     blacklist_reason = Column(String, nullable=True)
+    # Document metadata fields for scoped search
+    publication_year = Column(Integer, nullable=True)
+    authors = Column(JSON, nullable=True)  # List of strings, e.g., ["John Doe", "Jane Smith"]
+    document_type = Column(String, nullable=True)  # One of DOCUMENT_TYPES
+    archive_path = Column(String, nullable=True)  # Path to archived original PDF
 
 
 class PDFMarkdownPage(Base):
@@ -120,6 +130,15 @@ def _ensure_schema():
             connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN blacklisted_at DATETIME"))
         if "blacklist_reason" not in existing_columns:
             connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN blacklist_reason TEXT"))
+        # New metadata columns for scoped search
+        if "publication_year" not in existing_columns:
+            connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN publication_year INTEGER"))
+        if "authors" not in existing_columns:
+            connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN authors TEXT"))  # JSON stored as TEXT
+        if "document_type" not in existing_columns:
+            connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN document_type TEXT"))
+        if "archive_path" not in existing_columns:
+            connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN archive_path TEXT"))
 
 
 _ensure_schema()

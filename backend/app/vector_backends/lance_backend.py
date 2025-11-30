@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -10,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import lancedb
 import numpy as np
+import pyarrow as pa
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 
@@ -52,6 +54,27 @@ class LanceVectorBackend(BaseVectorBackend):
 
     _TABLE_NAME = "pdf_documents"
 
+    # Explicit PyArrow schema to avoid null-type inference issues
+    # The vector dimension is 384 for all-MiniLM-L6-v2
+    _TABLE_SCHEMA = pa.schema([
+        pa.field("id", pa.string()),
+        pa.field("text", pa.string()),
+        pa.field("vector", pa.list_(pa.float32(), 384)),
+        pa.field("pdf_id", pa.int64()),
+        pa.field("source", pa.string()),
+        pa.field("chunk_id", pa.string()),
+        pa.field("page", pa.int64()),
+        pa.field("batch", pa.string()),
+        pa.field("index", pa.int64()),
+        pa.field("length", pa.int64()),
+        pa.field("timestamp", pa.float64()),
+        pa.field("metadata", pa.string()),  # JSON serialized
+        # Document-level metadata for filtered search
+        pa.field("publication_year", pa.int64()),
+        pa.field("authors", pa.list_(pa.string())),
+        pa.field("document_type", pa.string()),
+    ])
+
     def __init__(self, persist_directory: Optional[str] = None):
         if persist_directory is None:
             current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -92,7 +115,12 @@ class LanceVectorBackend(BaseVectorBackend):
             return
 
         try:
-            self.table = self.client.create_table(self._TABLE_NAME, records)
+            # Create table with explicit schema to ensure proper types
+            self.table = self.client.create_table(
+                self._TABLE_NAME,
+                records,
+                schema=self._TABLE_SCHEMA,
+            )
             logger.info("Created Lance table with %s initial rows", len(records))
         except Exception as exc:  # noqa: BLE001
             message = str(exc)
@@ -113,19 +141,30 @@ class LanceVectorBackend(BaseVectorBackend):
         records: List[Dict[str, Any]] = []
         metadatas = metadatas or [{} for _ in chunks]
         for chunk, embedding, meta in zip(chunks, embeddings, metadatas):
+            # Use sentinel values for metadata fields to ensure proper type inference
+            # 0 means "unset" for publication_year, "" means "unset" for document_type
+            publication_year = meta.get("publication_year")
+            document_type = meta.get("document_type")
+            authors = meta.get("authors")
+
             record = {
                 "id": f"doc_{meta.get('pdf_id')}_{meta.get('chunk_id')}",
                 "text": chunk,
                 "vector": embedding.tolist(),
-                "pdf_id": meta.get("pdf_id"),
-                "source": meta.get("source"),
-                "chunk_id": meta.get("chunk_id"),
-                "page": meta.get("page"),
-                "batch": meta.get("batch"),
-                "index": meta.get("index"),
-                "length": meta.get("length"),
-                "timestamp": meta.get("timestamp"),
-                "metadata": meta,
+                "pdf_id": int(meta.get("pdf_id") or 0),
+                "source": str(meta.get("source") or ""),
+                "chunk_id": str(meta.get("chunk_id") or ""),
+                "page": int(meta.get("page") or 0),
+                "batch": str(meta.get("batch") or ""),
+                "index": int(meta.get("index") or 0),
+                "length": int(meta.get("length") or 0),
+                "timestamp": float(meta.get("timestamp") or 0.0),
+                "metadata": json.dumps(meta),  # Serialize as JSON string
+                # Document-level metadata for filtered search
+                # Use sentinel values (0, "", []) to ensure proper type inference in LanceDB
+                "publication_year": int(publication_year) if publication_year else 0,
+                "authors": list(authors) if authors else [],
+                "document_type": str(document_type) if document_type else "",
             }
             records.append(record)
         return records
@@ -158,6 +197,9 @@ class LanceVectorBackend(BaseVectorBackend):
         filter_criteria: Optional[Dict[str, Any]] = None,
         offset: int = 0,
     ) -> Dict[str, Any]:
+        # Try to open table if it was created after init
+        if self.table is None:
+            self.table = self._open_table()
         if self.table is None or self.get_document_count() == 0:
             return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
@@ -177,7 +219,19 @@ class LanceVectorBackend(BaseVectorBackend):
                 return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
             documents = df["text"].tolist()
-            metadatas = df["metadata"].tolist()
+            # Deserialize metadata from JSON strings
+            raw_metadatas = df["metadata"].tolist()
+            metadatas = []
+            for raw in raw_metadatas:
+                if isinstance(raw, str):
+                    try:
+                        metadatas.append(json.loads(raw))
+                    except json.JSONDecodeError:
+                        metadatas.append({})
+                elif isinstance(raw, dict):
+                    metadatas.append(raw)
+                else:
+                    metadatas.append({})
 
             scores_series = df["score"] if "score" in df.columns else None
             distance_series = df["distance"] if "distance" in df.columns else None
@@ -277,6 +331,81 @@ class LanceVectorBackend(BaseVectorBackend):
             logger.error("Error deleting from LanceDB: %s", exc, exc_info=True)
             return False
 
+    def update_document_metadata(
+        self,
+        pdf_id: int,
+        publication_year: Optional[int] = None,
+        authors: Optional[List[str]] = None,
+        document_type: Optional[str] = None,
+    ) -> bool:
+        """Update metadata fields on all chunks belonging to a document.
+
+        LanceDB doesn't support in-place updates, so we:
+        1. Read all chunks for the document
+        2. Update metadata fields
+        3. Delete old chunks
+        4. Re-add with updated metadata
+        """
+        # Try to open table if it was created after init
+        if self.table is None:
+            self.table = self._open_table()
+        if self.table is None:
+            logger.warning("Cannot update metadata: Lance table not initialized")
+            return False
+
+        try:
+            # Fetch all chunks for this pdf_id
+            where_expr = f"pdf_id == {pdf_id}"
+            df = self.table.search().where(where_expr).limit(100000).to_pandas()
+
+            if df.empty:
+                logger.info("No chunks found for pdf_id=%s, nothing to update", pdf_id)
+                return True
+
+            logger.info("Updating metadata for %d chunks (pdf_id=%s)", len(df), pdf_id)
+
+            # Build updated records with proper types matching the schema
+            updated_records = []
+            for _, row in df.iterrows():
+                # Preserve existing metadata (it's stored as JSON string)
+                existing_meta = row.get("metadata", "{}")
+                if isinstance(existing_meta, str):
+                    existing_meta = existing_meta  # Already a string
+                else:
+                    existing_meta = json.dumps(existing_meta) if existing_meta else "{}"
+
+                record = {
+                    "id": str(row["id"]),
+                    "text": str(row["text"]),
+                    "vector": list(row["vector"]),
+                    "pdf_id": int(row["pdf_id"]),
+                    "source": str(row.get("source") or ""),
+                    "chunk_id": str(row.get("chunk_id") or ""),
+                    "page": int(row.get("page") or 0),
+                    "batch": str(row.get("batch") or ""),
+                    "index": int(row.get("index") or 0),
+                    "length": int(row.get("length") or 0),
+                    "timestamp": float(row.get("timestamp") or 0.0),
+                    "metadata": existing_meta,
+                    # Updated metadata fields - use sentinel values for unset
+                    "publication_year": int(publication_year) if publication_year is not None else 0,
+                    "authors": list(authors) if authors is not None else [],
+                    "document_type": str(document_type) if document_type is not None else "",
+                }
+                updated_records.append(record)
+
+            # Delete old chunks
+            self.table.delete(where=where_expr)
+
+            # Re-add with updated metadata
+            self.table.add(updated_records)
+            logger.info("Successfully updated metadata for pdf_id=%s", pdf_id)
+            return True
+
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Error updating metadata in LanceDB: %s", exc, exc_info=True)
+            return False
+
     def rebuild_from_markdown(self) -> None:
         if self.get_document_count() > 0:
             logger.info("Lance store already populated; skipping rebuild")
@@ -341,6 +470,10 @@ class LanceVectorBackend(BaseVectorBackend):
                                 "index": chunk_counter,
                                 "length": len(chunk),
                                 "timestamp": time.time(),
+                                # Document metadata from DB, using sentinel values for unset
+                                "publication_year": doc.publication_year or 0,
+                                "authors": doc.authors or [],
+                                "document_type": doc.document_type or "",
                             }
                         )
                         chunk_counter += 1

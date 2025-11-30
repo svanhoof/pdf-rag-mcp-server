@@ -97,6 +97,17 @@ class VectorStore:
     ) -> bool:
         return self.backend.delete(filter=filter, ids=ids)
 
+    def update_document_metadata(
+        self,
+        pdf_id: int,
+        publication_year: Optional[int] = None,
+        authors: Optional[List[str]] = None,
+        document_type: Optional[str] = None,
+    ) -> bool:
+        return self.backend.update_document_metadata(
+            pdf_id, publication_year, authors, document_type
+        )
+
     def rebuild_from_markdown(self) -> None:
         self.backend.rebuild_from_markdown()
 

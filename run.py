@@ -25,7 +25,7 @@ def check_requirements():
     if not os.path.exists("backend/static"):
         print("Error: Static files directory not found, please ensure frontend is built")
         sys.exit(1)
-    
+
     # Check if index.html exists
     if not os.path.exists("backend/static/index.html"):
         print("Error: index.html is missing in static files directory")

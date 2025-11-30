@@ -3,6 +3,8 @@ import {
   Badge,
   Box,
   Button,
+  Checkbox,
+  CheckboxGroup,
   Flex,
   Heading,
   HStack,
@@ -22,10 +24,12 @@ import {
   Tooltip,
   useDisclosure,
   useToast,
+  Wrap,
+  WrapItem,
 } from '@chakra-ui/react';
-import { FiBookOpen, FiSearch } from 'react-icons/fi';
+import { FiBookOpen, FiSearch, FiX } from 'react-icons/fi';
 import ReactMarkdown from 'react-markdown';
-import { fetchDocumentMarkdown, searchDocuments } from '../api/documents';
+import { fetchDocumentMarkdown, searchDocuments, DOCUMENT_TYPES } from '../api/documents';
 
 const clampLimit = (value) => {
   if (Number.isNaN(value) || value == null) {
@@ -45,8 +49,23 @@ const Search = () => {
   const [loadingMarkdown, setLoadingMarkdown] = useState(false);
   const [requestedLimit, setRequestedLimit] = useState(limit);
 
+  // Filter state
+  const [yearStart, setYearStart] = useState('');
+  const [yearEnd, setYearEnd] = useState('');
+  const [documentTypes, setDocumentTypes] = useState([]);
+  const [authorFilter, setAuthorFilter] = useState('');
+
   const toast = useToast();
   const { isOpen, onOpen, onClose } = useDisclosure();
+
+  const hasActiveFilters = yearStart || yearEnd || documentTypes.length > 0 || authorFilter;
+
+  const clearFilters = () => {
+    setYearStart('');
+    setYearEnd('');
+    setDocumentTypes([]);
+    setAuthorFilter('');
+  };
 
   const executeSearch = useCallback(
     async () => {
@@ -61,7 +80,14 @@ const Search = () => {
 
       setIsSearching(true);
       try {
-        const payload = await searchDocuments({ query: trimmed, limit });
+        const payload = await searchDocuments({
+          query: trimmed,
+          limit,
+          year_start: yearStart ? parseInt(yearStart, 10) : null,
+          year_end: yearEnd ? parseInt(yearEnd, 10) : null,
+          document_types: documentTypes.length > 0 ? documentTypes : null,
+          author: authorFilter.trim() || null,
+        });
         setResults(payload.results || []);
         setRequestedLimit(payload.limit ?? limit);
         setHasSearched(true);
@@ -76,7 +102,7 @@ const Search = () => {
         setIsSearching(false);
       }
     },
-    [query, limit, toast]
+    [query, limit, yearStart, yearEnd, documentTypes, authorFilter, toast]
   );
 
   const handleSubmit = () => {
@@ -134,46 +160,125 @@ const Search = () => {
       </Stack>
 
       <Box bg="white" p={{ base: 4, md: 6 }} shadow="md" borderRadius="lg">
-        <Stack spacing={4} direction={{ base: 'column', md: 'row' }} align="flex-end">
-          <Box flex="1">
-            <Text fontSize="sm" fontWeight="medium" mb={1}>
-              Query
-            </Text>
-            <Input
-              placeholder="Search for topics, phrases, or keywords"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  handleSubmit();
-                }
-              }}
-            />
-          </Box>
+        <Stack spacing={4}>
+          <Stack spacing={4} direction={{ base: 'column', md: 'row' }} align="flex-end">
+            <Box flex="1">
+              <Text fontSize="sm" fontWeight="medium" mb={1}>
+                Query
+              </Text>
+              <Input
+                placeholder="Search for topics, phrases, or keywords"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    handleSubmit();
+                  }
+                }}
+              />
+            </Box>
 
-          <Box w={{ base: '100%', md: '160px' }}>
-            <Text fontSize="sm" fontWeight="medium" mb={1}>
-              Number of results
-            </Text>
-            <NumberInput
-              min={1}
-              max={50}
-              value={limit}
-              onChange={(_, valueAsNumber) => setLimit(clampLimit(valueAsNumber))}
-            >
-              <NumberInputField />
-            </NumberInput>
-          </Box>
+            <Box w={{ base: '100%', md: '160px' }}>
+              <Text fontSize="sm" fontWeight="medium" mb={1}>
+                Number of results
+              </Text>
+              <NumberInput
+                min={1}
+                max={50}
+                value={limit}
+                onChange={(_, valueAsNumber) => setLimit(clampLimit(valueAsNumber))}
+              >
+                <NumberInputField />
+              </NumberInput>
+            </Box>
 
-          <Button
-            colorScheme="blue"
-            leftIcon={<FiSearch />}
-            minW={{ base: '100%', md: '140px' }}
-            isLoading={isSearching}
-            onClick={handleSubmit}
-          >
-            Search
-          </Button>
+            <HStack spacing={2}>
+              <Button
+                colorScheme="blue"
+                leftIcon={<FiSearch />}
+                minW={{ base: '100%', md: '140px' }}
+                isLoading={isSearching}
+                onClick={handleSubmit}
+              >
+                Search
+              </Button>
+            </HStack>
+          </Stack>
+
+          <Box bg="gray.50" p={4} borderRadius="md" mt={4}>
+            <Stack spacing={4}>
+              <Stack spacing={4} direction={{ base: 'column', md: 'row' }} align="flex-end">
+                <Box>
+                  <Text fontSize="sm" fontWeight="medium" mb={1}>
+                    Year From
+                  </Text>
+                  <NumberInput
+                    min={1900}
+                    max={2100}
+                    value={yearStart}
+                    onChange={(valueString) => setYearStart(valueString)}
+                    w="120px"
+                  >
+                    <NumberInputField placeholder="1900" />
+                  </NumberInput>
+                </Box>
+
+                <Box>
+                  <Text fontSize="sm" fontWeight="medium" mb={1}>
+                    Year To
+                  </Text>
+                  <NumberInput
+                    min={1900}
+                    max={2100}
+                    value={yearEnd}
+                    onChange={(valueString) => setYearEnd(valueString)}
+                    w="120px"
+                  >
+                    <NumberInputField placeholder="2100" />
+                  </NumberInput>
+                </Box>
+
+                <Box flex="1">
+                  <Text fontSize="sm" fontWeight="medium" mb={1}>
+                    Author
+                  </Text>
+                  <Input
+                    placeholder="Filter by author name"
+                    value={authorFilter}
+                    onChange={(e) => setAuthorFilter(e.target.value)}
+                  />
+                </Box>
+
+                {hasActiveFilters && (
+                  <Button
+                    variant="ghost"
+                    colorScheme="red"
+                    leftIcon={<FiX />}
+                    onClick={clearFilters}
+                  >
+                    Clear
+                  </Button>
+                )}
+              </Stack>
+
+              <Box>
+                <Text fontSize="sm" fontWeight="medium" mb={2}>
+                  Document Types
+                </Text>
+                <CheckboxGroup value={documentTypes} onChange={setDocumentTypes}>
+                  <Wrap spacing={4}>
+                    {DOCUMENT_TYPES.map((type) => (
+                      <WrapItem key={type}>
+                        <Checkbox value={type}>
+                          {type.charAt(0).toUpperCase() + type.slice(1)}
+                        </Checkbox>
+                      </WrapItem>
+                    ))}
+                  </Wrap>
+                </CheckboxGroup>
+              </Box>
+            </Stack>
+          </Box>
         </Stack>
       </Box>
 

@@ -17,7 +17,7 @@ import { FiHome, FiBook, FiGithub, FiMenu, FiSearch } from 'react-icons/fi';
 const Header = () => {  
   return (  
     <Box bg="blue.700" color="white" px={4} py={3} shadow="md">  
-      <Flex justify="space-between" align="center" maxW="container.xl" mx="auto">  
+      <Flex justify="space-between" align="center" w="full" mx="auto" px={{ base: 0, md: 4 }}>  
         <Flex align="center">  
           <Heading size="md" mr={2}>MCP PDF Knowledge Base</Heading>  
           <Menu isLazy> 

@@ -367,6 +367,8 @@ class PDFProcessor:
                 page_num = page_numbers[page_index] if page_numbers else 0
                 
                 # Create metadata with more information
+                # Include document-level metadata fields with sentinel values
+                # These will be updated later via the metadata API
                 metadata = {
                     "source": filename,
                     "chunk_id": f"{batch_id}_{i}",  # Unique chunk_id
@@ -375,7 +377,11 @@ class PDFProcessor:
                     "batch": batch_id,
                     "index": i,
                     "length": len(chunk),
-                    "timestamp": time.time()
+                    "timestamp": time.time(),
+                    # Document metadata - sentinel values for proper type inference
+                    "publication_year": 0,  # 0 = not set
+                    "authors": [],  # empty list = not set
+                    "document_type": "",  # empty string = not set
                 }
                 metadatas.append(metadata)
             
