@@ -331,4 +331,5 @@ pyrightconfig.json
 *.sqlite3
 data/
 input/
+archive/
 # End of https://www.toptal.com/developers/gitignore/api/python,node
