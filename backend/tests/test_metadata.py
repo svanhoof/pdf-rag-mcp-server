@@ -365,3 +365,113 @@ class TestMetadataInDocumentResponse:
         assert doc["publication_year"] == 2022
         assert doc["document_type"] == "report"
         assert doc["authors"] == ["Test Author"]
+
+
+class TestAuthorSearch:
+    """Test author filtering in search results."""
+
+    async def test_search_with_author_filter_matches(self, client: AsyncClient, uploaded_document: int):
+        """Test search finds document when author filter matches."""
+        # First set author metadata on the document
+        await client.patch(
+            f"/api/documents/{uploaded_document}/metadata",
+            json={"authors": ["John Smith", "Jane Doe"]}
+        )
+        await asyncio.sleep(1)  # Allow vector store to update
+
+        # Search with matching author (partial match should work)
+        response = await client.get(
+            "/api/search",
+            params={"q": "road safety", "author": "Smith"}
+        )
+        assert response.status_code == 200
+        results = response.json().get("results", [])
+        found = any(r.get("pdf_id") == uploaded_document for r in results)
+        assert found, "Document should appear when filtered by matching author"
+
+    async def test_search_with_author_filter_no_match(self, client: AsyncClient, uploaded_document: int):
+        """Test search excludes document when author filter doesn't match."""
+        # Set author metadata
+        await client.patch(
+            f"/api/documents/{uploaded_document}/metadata",
+            json={"authors": ["John Smith"]}
+        )
+        await asyncio.sleep(1)  # Allow vector store to update
+
+        # Search with non-matching author
+        response = await client.get(
+            "/api/search",
+            params={"q": "road safety", "author": "NonExistentAuthor"}
+        )
+        assert response.status_code == 200
+        results = response.json().get("results", [])
+        found = any(r.get("pdf_id") == uploaded_document for r in results)
+        assert not found, "Document should NOT appear when filtered by wrong author"
+
+    async def test_search_author_case_insensitive(self, client: AsyncClient, uploaded_document: int):
+        """Test that author search is case insensitive."""
+        # Set author metadata
+        await client.patch(
+            f"/api/documents/{uploaded_document}/metadata",
+            json={"authors": ["John Smith"]}
+        )
+        await asyncio.sleep(1)  # Allow vector store to update
+
+        # Search with lowercase author
+        response = await client.get(
+            "/api/search",
+            params={"q": "road safety", "author": "john smith"}
+        )
+        assert response.status_code == 200
+        results = response.json().get("results", [])
+        found = any(r.get("pdf_id") == uploaded_document for r in results)
+        assert found, "Author search should be case insensitive"
+
+    async def test_search_without_author_returns_all(self, client: AsyncClient, uploaded_document: int):
+        """Test search without author filter returns documents regardless of author."""
+        # Set author metadata
+        await client.patch(
+            f"/api/documents/{uploaded_document}/metadata",
+            json={"authors": ["Some Author"]}
+        )
+        await asyncio.sleep(1)  # Allow vector store to update
+
+        # Search without author filter
+        response = await client.get(
+            "/api/search",
+            params={"q": "road safety"}
+        )
+        assert response.status_code == 200
+        results = response.json().get("results", [])
+        found = any(r.get("pdf_id") == uploaded_document for r in results)
+        assert found, "Document should appear when no author filter is applied"
+
+    async def test_metadata_update_propagates_to_vector_store(self, client: AsyncClient, uploaded_document: int):
+        """Test that updating metadata via API propagates to vector store chunks."""
+        # Initial search without filter to confirm document is indexed
+        response = await client.get(
+            "/api/search",
+            params={"q": "road safety"}
+        )
+        initial_found = any(r.get("pdf_id") == uploaded_document for r in response.json().get("results", []))
+
+        if not initial_found:
+            pytest.skip("Document not found in search results - may not be fully processed")
+
+        # Set specific author
+        test_author = "UniqueTestAuthor123"
+        await client.patch(
+            f"/api/documents/{uploaded_document}/metadata",
+            json={"authors": [test_author]}
+        )
+        await asyncio.sleep(1)  # Allow vector store to update
+
+        # Search with the specific author
+        response = await client.get(
+            "/api/search",
+            params={"q": "road safety", "author": test_author}
+        )
+        assert response.status_code == 200
+        results = response.json().get("results", [])
+        found = any(r.get("pdf_id") == uploaded_document for r in results)
+        assert found, "Author metadata update should propagate to vector store and enable filtering"

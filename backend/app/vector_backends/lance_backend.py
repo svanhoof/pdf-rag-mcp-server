@@ -219,28 +219,53 @@ class LanceVectorBackend(BaseVectorBackend):
                 return {"documents": [[]], "metadatas": [[]], "distances": [[]]}
 
             documents = df["text"].tolist()
-            # Deserialize metadata from JSON strings
+            # Deserialize metadata from JSON strings and merge with dedicated columns
             raw_metadatas = df["metadata"].tolist()
+            authors_col = df["authors"].tolist() if "authors" in df.columns else [None] * len(raw_metadatas)
+            pub_year_col = df["publication_year"].tolist() if "publication_year" in df.columns else [None] * len(raw_metadatas)
+            doc_type_col = df["document_type"].tolist() if "document_type" in df.columns else [None] * len(raw_metadatas)
             metadatas = []
-            for raw in raw_metadatas:
+            for idx, raw in enumerate(raw_metadatas):
                 if isinstance(raw, str):
                     try:
-                        metadatas.append(json.loads(raw))
+                        meta = json.loads(raw)
                     except json.JSONDecodeError:
-                        metadatas.append({})
+                        meta = {}
                 elif isinstance(raw, dict):
-                    metadatas.append(raw)
+                    meta = raw
                 else:
-                    metadatas.append({})
+                    meta = {}
+                # Merge dedicated metadata columns into the metadata dict
+                # Handle numpy arrays and lists for authors
+                authors_val = authors_col[idx]
+                if authors_val is not None:
+                    # Convert to list if numpy array
+                    if hasattr(authors_val, "tolist"):
+                        authors_val = authors_val.tolist()
+                    if isinstance(authors_val, list) and len(authors_val) > 0:
+                        meta["authors"] = authors_val
+                pub_year_val = pub_year_col[idx]
+                if pub_year_val is not None and pub_year_val != 0:
+                    meta["publication_year"] = int(pub_year_val)
+                doc_type_val = doc_type_col[idx]
+                if doc_type_val is not None and doc_type_val:
+                    meta["document_type"] = str(doc_type_val)
+                metadatas.append(meta)
 
             scores_series = df["score"] if "score" in df.columns else None
-            distance_series = df["distance"] if "distance" in df.columns else None
+            # LanceDB returns _distance (with underscore prefix)
+            distance_series = df["_distance"] if "_distance" in df.columns else (
+                df["distance"] if "distance" in df.columns else None
+            )
 
             if scores_series is not None:
                 scores_all = [float(max(0.0, min(1.0, value))) for value in scores_series.tolist()]
             elif distance_series is not None:
+                # LanceDB uses L2 distance by default. Convert to similarity score.
+                # L2 distance ranges from 0 (identical) to infinity.
+                # Use exponential decay: score = exp(-distance) or 1/(1+distance)
                 distance_values = [float(value) for value in distance_series.tolist()]
-                scores_all = [max(0.0, min(1.0, 1.0 - value)) for value in distance_values]
+                scores_all = [1.0 / (1.0 + d) for d in distance_values]
             else:
                 scores_all = [0.0 for _ in documents]
 

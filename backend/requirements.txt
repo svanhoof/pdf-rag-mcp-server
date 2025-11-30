@@ -2,8 +2,10 @@ fastapi
 uvicorn
 sqlalchemy
 pydantic
+python-dotenv
 PyMuPDF
 langchain==0.0.353
+langchain-anthropic
 sentence-transformers
 chromadb
 lancedb

@@ -27,6 +27,7 @@ from app.database import PDFDocument, SessionLocal
 from app.vector_store import VectorStore
 from app.database import PDFMarkdownPage
 from app.websocket import manager
+from app.metadata_extractor import extract_metadata_from_pdf
 
 # Configure logging
 logging.basicConfig(
@@ -424,7 +425,41 @@ class PDFProcessor:
                 await self._emit_status(filename)
                 self._clear_broadcast_marker(filename)
                 return False
-            
+
+            # Extract metadata using LLM (if API key is available)
+            PROCESSING_STATUS[filename]["progress"] = 90
+            PROCESSING_STATUS[filename]["status"] = "Extracting metadata"
+            await self._emit_status(filename)
+
+            try:
+                if os.getenv("ANTHROPIC_API_KEY"):
+                    logger.info(f"Extracting metadata from PDF: {filename}")
+                    metadata = extract_metadata_from_pdf(pdf_path)
+
+                    # Update database with extracted metadata
+                    pdf_doc.authors = metadata.authors if metadata.authors else None
+                    pdf_doc.publication_year = metadata.publication_year
+                    pdf_doc.document_type = metadata.document_type
+                    db.commit()
+
+                    # Update vector store metadata for all chunks of this document
+                    self.vector_store.update_document_metadata(
+                        pdf_id=pdf_id,
+                        publication_year=metadata.publication_year,
+                        authors=metadata.authors,
+                        document_type=metadata.document_type,
+                    )
+
+                    logger.info(
+                        f"Metadata extracted for {filename}: authors={metadata.authors}, "
+                        f"year={metadata.publication_year}, type={metadata.document_type}"
+                    )
+                else:
+                    logger.info("ANTHROPIC_API_KEY not set, skipping metadata extraction")
+            except Exception as meta_err:
+                # Don't fail the whole process if metadata extraction fails
+                logger.warning(f"Metadata extraction failed for {filename}: {meta_err}")
+
             # Complete
             pdf_doc.progress = 100
             pdf_doc.processed = True
@@ -437,7 +472,7 @@ class PDFProcessor:
             logger.info(f"PDF processing completed: {filename}")
             await self._emit_status(filename)
             self._clear_broadcast_marker(filename)
-            
+
             return True
             
         except Exception as e:

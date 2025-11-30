@@ -17,6 +17,10 @@ from pathlib import Path
 from typing import Optional, Literal
 from urllib.parse import quote
 
+# Load environment variables from .env file (if present)
+from dotenv import load_dotenv
+load_dotenv()  # Loads from .env in current directory or parent directories
+
 # Third-party library imports
 import fitz  # PyMuPDF
 import pytesseract

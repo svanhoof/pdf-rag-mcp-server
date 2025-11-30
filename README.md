@@ -62,6 +62,8 @@ A powerful document knowledge base system that leverages PDF processing, vector 
 - **PDF Document Upload & Processing**: Upload PDFs and automatically extract, chunk, and vectorize content
 - **Real-time Processing Status**: WebSocket-based real-time status updates during document processing
 - **Semantic Search**: Vector-based semantic search across all processed documents
+- **PDF Archive & Download**: Original PDFs are preserved in an archive folder with download URLs returned in search results
+- **Document Metadata**: Tag documents with publication year, authors, and document type for filtered search
 - **MCP Protocol Support**: Integrate with AI tools like Cursor using the Model Context Protocol
 - **Modern Web Interface**: React/Chakra UI frontend for document management and querying
 - **Fast Dependency Management**: Uses uv for efficient Python dependency management
@@ -284,6 +286,7 @@ Create a `.env` file (you can copy `.env.sample`) to tune ports, volume paths, a
 | `MCP_PORT` | `7800` | Host port for the MCP endpoint |
 | `PDF_RAG_IMAGE` | `ghcr.io/tekgnosis-net/pdf-rag-mcp-server:latest` | Image reference pulled by Docker Compose |
 | `PDF_RAG_UPLOADS` | `./data/uploads` | Host path for persisted uploaded PDFs |
+| `PDF_RAG_ARCHIVE_DIR` | `./archive` | Host path for archived original PDFs (preserves original filenames) |
 | `PDF_RAG_CHROMA_DB` | `./data/chroma_db` | Host path for the Chroma vector database |
 | `PDF_RAG_LANCE_DB` | `./data/lance_db` | Host path for the LanceDB vector database |
 | `PDF_RAG_MODEL_CACHE` | `./data/model_cache` | Host path for the sentence-transformers model cache |
@@ -328,6 +331,17 @@ Both backends share the same ingestion code paths and metadata schema. When a ba
 2. Click on "Upload New PDF" and select a PDF file
 3. The system will process the file, showing progress in real-time
 4. Once processed, the document will be available for searching
+
+When you upload a PDF, the system automatically:
+- Saves a working copy to `./uploads/` with a UUID prefix for processing
+- Archives the original file to `./archive/` (or `PDF_RAG_ARCHIVE_DIR`) preserving the original filename
+- If a file with the same name already exists in the archive, a numeric suffix is added (e.g., `document(1).pdf`)
+
+### Downloading Original PDFs
+
+Search results now include a `download_url` field that points to the archived original PDF. You can:
+- Use the download URL directly: `GET /api/archive/{doc_id}`
+- Access the endpoint programmatically to retrieve the original file with proper content-disposition headers
 
 ### Searching Documents
 
@@ -380,8 +394,9 @@ The MCP service exposes lightweight HTTP endpoints that Cursor and other MCP cli
 
 | Method | Path | Purpose | Notes |
 | --- | --- | --- | --- |
-| `GET` | `/mcp/query` | Perform a semantic search against the vector database. | Provide a `query` string; returns the top 5 chunks with metadata. |
+| `GET` | `/mcp/query` | Perform a semantic search against the vector database. | Provide a `query` string; returns the top 5 chunks with metadata including `download_url` for archived PDFs. Supports filters: `publication_year`, `year_start`, `year_end`, `document_type`, `document_types`, `author`. |
 | `GET` | `/mcp/documents/markdown` | Retrieve a processed PDF rendered as Markdown. | Pass a `title` query parameter that matches the document filename (substring or fuzzy match). Optional `start_page`, `max_pages`, and `max_characters` parameters let you page through large documents without overrunning client context limits. |
+| `GET` | `/api/archive/{doc_id}` | Download the original archived PDF. | Returns the PDF file with proper content-disposition headers. The `download_url` in search results points here. |
 
 Both endpoints return standard JSON responses and error codes (`404` for missing matches, `409` for in-progress/blacklisted files, etc.), making them easy to script against outside of MCP clients.
 
@@ -426,7 +441,8 @@ pdf-rag-mcp-server/
 │   │   └── App.jsx        # Main application component
 │   ├── package.json       # Frontend dependencies
 │   └── vite.config.js     # Vite configuration
-├── uploads/               # PDF file storage
+├── uploads/               # PDF file storage (working copies with UUID prefix)
+├── archive/               # Archived original PDFs (preserves original filenames)
 └── README.md              # This documentation
 ```
 
