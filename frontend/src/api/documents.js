@@ -46,8 +46,9 @@ export const searchDocuments = async ({
   return response.data;
 };
 
-export const updateDocumentMetadata = async ({ id, publication_year, authors, document_type }) => {
+export const updateDocumentMetadata = async ({ id, title, publication_year, authors, document_type }) => {
   const payload = {};
+  if (title !== undefined) payload.title = title;
   if (publication_year !== undefined) payload.publication_year = publication_year;
   if (authors !== undefined) payload.authors = authors;
   if (document_type !== undefined) payload.document_type = document_type;

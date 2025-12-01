@@ -28,6 +28,7 @@ from app.vector_store import VectorStore
 from app.database import PDFMarkdownPage
 from app.websocket import manager
 from app.metadata_extractor import extract_metadata_from_pdf
+from app.archive_utils import rename_archive_for_document
 
 # Configure logging
 logging.basicConfig(
@@ -437,10 +438,24 @@ class PDFProcessor:
                     metadata = extract_metadata_from_pdf(pdf_path)
 
                     # Update database with extracted metadata
+                    pdf_doc.title = metadata.title
                     pdf_doc.authors = metadata.authors if metadata.authors else None
                     pdf_doc.publication_year = metadata.publication_year
                     pdf_doc.document_type = metadata.document_type
                     db.commit()
+
+                    # Rename archive file to match structured naming convention
+                    first_author = metadata.authors[0] if metadata.authors else None
+                    new_archive_path = rename_archive_for_document(
+                        archive_path=pdf_doc.archive_path,
+                        filename=pdf_doc.filename,
+                        first_author=first_author,
+                        year=metadata.publication_year,
+                        title=metadata.title,
+                    )
+                    if new_archive_path:
+                        pdf_doc.archive_path = new_archive_path
+                        db.commit()
 
                     # Update vector store metadata for all chunks of this document
                     self.vector_store.update_document_metadata(
@@ -451,7 +466,7 @@ class PDFProcessor:
                     )
 
                     logger.info(
-                        f"Metadata extracted for {filename}: authors={metadata.authors}, "
+                        f"Metadata extracted for {filename}: title={metadata.title}, authors={metadata.authors}, "
                         f"year={metadata.publication_year}, type={metadata.document_type}"
                     )
                 else:

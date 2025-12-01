@@ -20,6 +20,7 @@ logger = logging.getLogger("metadata_extractor")
 class DocumentMetadata:
     """Extracted metadata from a document."""
 
+    title: Optional[str]
     authors: List[str]
     publication_year: Optional[int]
     document_type: Optional[str]
@@ -27,6 +28,7 @@ class DocumentMetadata:
     def to_dict(self) -> dict:
         """Convert to dictionary for database storage."""
         return {
+            "title": self.title,
             "authors": self.authors,
             "publication_year": self.publication_year,
             "document_type": self.document_type,
@@ -90,16 +92,19 @@ def extract_metadata_with_llm(text: str) -> DocumentMetadata:
     system_prompt = f"""You are a document metadata extraction assistant. Your task is to analyze
 document text and extract the following information:
 
-1. **Authors**: List of author names. Extract full names when available.
-2. **Publication Year**: The year the document was published (4-digit year).
-3. **Document Type**: Classify the document as one of: {document_types_str}
+1. **Title**: The document title. Look for the main heading, usually at the top of the first page.
+2. **Authors**: List of author names. Extract full names when available.
+3. **Publication Year**: The year the document was published (4-digit year).
+4. **Document Type**: Classify the document as one of: {document_types_str}
 
 Respond in the following exact format (use these exact labels):
+TITLE: <document title, or "Unknown" if not found>
 AUTHORS: <comma-separated list of authors, or "Unknown" if not found>
 YEAR: <4-digit year, or "Unknown" if not found>
 TYPE: <one of {document_types_str}, or "other" if unclear>
 
 Be precise and only extract information that is clearly stated in the document.
+For the title, look for the largest or most prominent heading at the start of the document.
 For academic papers, look for author names near the title or in the header.
 For the publication year, look for copyright notices, publication dates, or dates in headers/footers."""
 
@@ -108,6 +113,7 @@ For the publication year, look for copyright notices, publication dates, or date
 {text}
 
 Remember to respond with:
+TITLE: <title>
 AUTHORS: <authors>
 YEAR: <year>
 TYPE: <type>"""
@@ -132,6 +138,7 @@ def parse_llm_response(response_text: str) -> DocumentMetadata:
     Returns:
         Parsed DocumentMetadata object.
     """
+    title: Optional[str] = None
     authors: List[str] = []
     publication_year: Optional[int] = None
     document_type: Optional[str] = None
@@ -141,7 +148,12 @@ def parse_llm_response(response_text: str) -> DocumentMetadata:
     for line in lines:
         line = line.strip()
 
-        if line.upper().startswith("AUTHORS:"):
+        if line.upper().startswith("TITLE:"):
+            title_str = line.split(":", 1)[1].strip()
+            if title_str.lower() != "unknown" and title_str:
+                title = title_str
+
+        elif line.upper().startswith("AUTHORS:"):
             authors_str = line.split(":", 1)[1].strip()
             if authors_str.lower() != "unknown" and authors_str:
                 # Split by comma and clean up each author name
@@ -167,6 +179,7 @@ def parse_llm_response(response_text: str) -> DocumentMetadata:
                 document_type = "other"
 
     return DocumentMetadata(
+        title=title,
         authors=authors,
         publication_year=publication_year,
         document_type=document_type,
@@ -201,11 +214,11 @@ def extract_metadata_from_pdf(pdf_path: str) -> DocumentMetadata:
 
     if not text.strip():
         logger.warning(f"No text extracted from {pdf_path}")
-        return DocumentMetadata(authors=[], publication_year=None, document_type="other")
+        return DocumentMetadata(title=None, authors=[], publication_year=None, document_type="other")
 
     # Use LLM to extract metadata
     metadata = extract_metadata_with_llm(text)
 
-    logger.info(f"Extracted metadata: authors={metadata.authors}, year={metadata.publication_year}, type={metadata.document_type}")
+    logger.info(f"Extracted metadata: title={metadata.title}, authors={metadata.authors}, year={metadata.publication_year}, type={metadata.document_type}")
 
     return metadata

@@ -296,6 +296,7 @@ Create a `.env` file (you can copy `.env.sample`) to tune ports, volume paths, a
 | `PDF_RAG_WATCH_MAX_WORKERS` | `1` | Maximum concurrent processing tasks spawned by the watcher |
 | `SENTENCE_TRANSFORMERS_DEVICE` | `cpu` | Set to `cuda` to use GPU embeddings when available |
 | `PDF_RAG_VECTOR_BACKEND` | `lance` | Vector backend to use (`lance` default, set to `chroma` to opt back in) |
+| `PDF_RAG_BASE_URL` | _(empty)_ | Base URL for full download URLs in search results (e.g., `http://localhost:8000`). If not set, relative URLs are returned. |
 | `SENTENCE_TRANSFORMERS_CACHE` | `/home/appuser/.cache/torch/sentence_transformers` | Override the cache location inside the container |
 
 ### Running with Docker Compose
@@ -334,14 +335,17 @@ Both backends share the same ingestion code paths and metadata schema. When a ba
 
 When you upload a PDF, the system automatically:
 - Saves a working copy to `./uploads/` with a UUID prefix for processing
-- Archives the original file to `./archive/` (or `PDF_RAG_ARCHIVE_DIR`) preserving the original filename
-- If a file with the same name already exists in the archive, a numeric suffix is added (e.g., `document(1).pdf`)
+- Archives the original file to `./archive/` (or `PDF_RAG_ARCHIVE_DIR`)
+- After metadata extraction (via LLM), renames the archive using structured naming: `<Author>_<Year>_<Title>.pdf`
+- If metadata is updated manually in the UI, the archive file is renamed to reflect the changes
+- If a file with the same name already exists in the archive, a numeric suffix is added (e.g., `Smith_2023_Paper(1).pdf`)
 
 ### Downloading Original PDFs
 
 Search results now include a `download_url` field that points to the archived original PDF. You can:
 - Use the download URL directly: `GET /api/archive/{doc_id}`
 - Access the endpoint programmatically to retrieve the original file with proper content-disposition headers
+- Set `PDF_RAG_BASE_URL` (e.g., `http://localhost:8000`) to get full URLs in search results instead of relative paths
 
 ### Searching Documents
 

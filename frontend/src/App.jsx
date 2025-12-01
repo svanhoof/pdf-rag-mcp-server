@@ -1,11 +1,12 @@
 import React from 'react';  
 import { ChakraProvider, Box, Container } from '@chakra-ui/react';  
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';  
-import Header from './components/Header';  
-import Dashboard from './pages/Dashboard';  
+import Header from './components/Header';
+import Dashboard from './pages/Dashboard';
 import PDFView from './pages/PDFView';
 import Search from './pages/Search';
 import Settings from './pages/Settings';
+import Monitoring from './pages/Monitoring';
 import { WebSocketProvider } from './context/WebSocketContext';  
 
 function App() {  
@@ -19,6 +20,7 @@ function App() {
               <Routes>  
                 <Route path="/" element={<Dashboard />} />  
                 <Route path="/search" element={<Search />} />
+                <Route path="/monitoring" element={<Monitoring />} />
                 <Route path="/pdf/:id" element={<PDFView />} />
                 <Route path="/settings" element={<Settings />} />
               </Routes>  

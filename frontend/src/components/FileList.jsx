@@ -29,9 +29,8 @@ import {
   Wrap,
   WrapItem,
 } from '@chakra-ui/react';
-import { FiTrash, FiInfo, FiBookOpen, FiEdit } from 'react-icons/fi';
+import { FiTrash, FiInfo, FiBookOpen, FiEdit, FiDownload } from 'react-icons/fi';
 import axios from 'axios';
-import { formatDistance } from 'date-fns';
 import ProgressBar from './ProgressBar';
 import { fetchDocumentMarkdown } from '../api/documents';
 import ReactMarkdown from 'react-markdown';
@@ -130,23 +129,39 @@ const FileListComponent = ({ documents, onDeleteDocument, showProgress }) => {
   const renderDesktopTable = () => (
     <Box overflowX="auto">
       <Table variant="simple" size="sm">
-        <Thead>  
-          <Tr>  
-            <Th>Filename</Th>  
-            <Th>Uploaded</Th>  
-            <Th>Size</Th>  
-            <Th>Status</Th>  
-            {showProgress && (<Th>Progress</Th>)}  
-            <Th>Actions</Th>  
-          </Tr>  
-        </Thead>  
-        <Tbody>  
-          {documents.map((doc) => (  
-            <Tr key={doc.id}>  
-              <Td fontWeight="medium">{doc.filename}</Td>  
-              <Td>  
-                {formatDistance(new Date(doc.uploaded_at), new Date(), { addSuffix: true })}  
-              </Td>  
+        <Thead>
+          <Tr>
+            <Th>Title</Th>
+            <Th>Author</Th>
+            <Th>Year</Th>
+            <Th>Size</Th>
+            <Th>Status</Th>
+            {showProgress && (<Th>Progress</Th>)}
+            <Th>Actions</Th>
+          </Tr>
+        </Thead>
+        <Tbody>
+          {documents.map((doc) => (
+            <Tr key={doc.id}>
+              <Td>
+                <HStack spacing={2}>
+                  <IconButton
+                    icon={<FiDownload />}
+                    aria-label="Download PDF"
+                    size="xs"
+                    variant="ghost"
+                    colorScheme="blue"
+                    as="a"
+                    href={`/api/archive/${doc.id}`}
+                    download
+                  />
+                  <Text fontWeight="medium" noOfLines={1} maxW="300px" title={doc.title || doc.filename}>
+                    {doc.title || doc.filename}
+                  </Text>
+                </HStack>
+              </Td>
+              <Td>{doc.authors && doc.authors.length > 0 ? doc.authors[0] : '-'}</Td>
+              <Td>{doc.publication_year || '-'}</Td>
               <Td>{formatFileSize(doc.file_size)}</Td>  
               <Td>  
                 <HStack spacing={2}>  
@@ -228,14 +243,31 @@ const FileListComponent = ({ documents, onDeleteDocument, showProgress }) => {
         >
           <Stack spacing={3}>
             <Box>
-              <Text fontWeight="semibold" noOfLines={2}>{doc.filename}</Text>
+              <HStack spacing={2}>
+                <IconButton
+                  icon={<FiDownload />}
+                  aria-label="Download PDF"
+                  size="sm"
+                  variant="ghost"
+                  colorScheme="blue"
+                  as="a"
+                  href={`/api/archive/${doc.id}`}
+                  download
+                />
+                <Text fontWeight="semibold" noOfLines={2}>{doc.title || doc.filename}</Text>
+              </HStack>
               <Wrap spacing={2} mt={1} shouldWrapChildren>
                 <WrapItem>{getStatusBadge(doc)}</WrapItem>
-                <WrapItem>
-                  <Text fontSize="xs" color="gray.500">
-                    {formatDistance(new Date(doc.uploaded_at), new Date(), { addSuffix: true })}
-                  </Text>
-                </WrapItem>
+                {doc.authors && doc.authors.length > 0 && (
+                  <WrapItem>
+                    <Text fontSize="xs" color="gray.500">{doc.authors[0]}</Text>
+                  </WrapItem>
+                )}
+                {doc.publication_year && (
+                  <WrapItem>
+                    <Text fontSize="xs" color="gray.500">{doc.publication_year}</Text>
+                  </WrapItem>
+                )}
               </Wrap>
               <Text fontSize="sm" color="gray.600" mt={1}>
                 {formatFileSize(doc.file_size)}

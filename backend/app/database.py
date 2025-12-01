@@ -88,6 +88,7 @@ class PDFDocument(Base):
     blacklisted_at = Column(DateTime, nullable=True)
     blacklist_reason = Column(String, nullable=True)
     # Document metadata fields for scoped search
+    title = Column(String, nullable=True)  # Document title extracted from PDF
     publication_year = Column(Integer, nullable=True)
     authors = Column(JSON, nullable=True)  # List of strings, e.g., ["John Doe", "Jane Smith"]
     document_type = Column(String, nullable=True)  # One of DOCUMENT_TYPES
@@ -131,6 +132,8 @@ def _ensure_schema():
         if "blacklist_reason" not in existing_columns:
             connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN blacklist_reason TEXT"))
         # New metadata columns for scoped search
+        if "title" not in existing_columns:
+            connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN title TEXT"))
         if "publication_year" not in existing_columns:
             connection.execute(text("ALTER TABLE pdf_documents ADD COLUMN publication_year INTEGER"))
         if "authors" not in existing_columns:

@@ -169,6 +169,10 @@ class ReparseRequest(BaseModel):
 class DocumentMetadataUpdate(BaseModel):
     """Payload for updating document metadata."""
 
+    title: str | None = Field(
+        default=None,
+        description="Document title.",
+    )
     publication_year: int | None = Field(
         default=None,
         ge=1900,
@@ -342,6 +346,10 @@ os.makedirs("./static", exist_ok=True)
 # Ensure archive directory exists for original PDF preservation
 ARCHIVE_DIR = os.getenv("PDF_RAG_ARCHIVE_DIR", "./archive")
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
+
+# Base URL for constructing full download URLs (e.g., "http://localhost:8000")
+# If not set, relative URLs will be returned
+BASE_URL = os.getenv("PDF_RAG_BASE_URL", "").rstrip("/")
 
 # Store active MCP sessions
 _active_mcp_sessions: dict[str, dict[str, object]] = {}
@@ -557,21 +565,29 @@ async def not_found_handler(request, exc):
     """If the route does not exist, return the frontend application to let the frontend handle routing"""
     return FileResponse("static/index.html")
 
-def _get_unique_archive_path(original_filename: str) -> str:
-    """Generate a unique archive path, adding numeric suffix if file exists."""
-    base_path = Path(ARCHIVE_DIR) / original_filename
-    if not base_path.exists():
-        return str(base_path)
+from app.archive_utils import (
+    get_unique_archive_path as _get_unique_archive_path,
+    rename_archive_for_document as _rename_archive_file_impl,
+)
 
-    # File exists, add numeric suffix
-    stem = base_path.stem
-    suffix = base_path.suffix
-    counter = 1
-    while True:
-        new_path = Path(ARCHIVE_DIR) / f"{stem}({counter}){suffix}"
-        if not new_path.exists():
-            return str(new_path)
-        counter += 1
+
+def _rename_archive_file(
+    doc: PDFDocument,
+    first_author: str | None = None,
+    year: int | None = None,
+    title: str | None = None,
+) -> str | None:
+    """Rename the archive file to match structured naming convention.
+
+    Returns the new archive path if renamed, None if no change needed or no archive exists.
+    """
+    return _rename_archive_file_impl(
+        archive_path=doc.archive_path,
+        filename=doc.filename,
+        first_author=first_author,
+        year=year,
+        title=title,
+    )
 
 
 @app.post("/api/upload")
@@ -698,6 +714,7 @@ async def get_documents(db: Session = Depends(get_db)):
             "blacklisted": doc.blacklisted,
             "blacklisted_at": doc.blacklisted_at,
             "blacklist_reason": doc.blacklist_reason,
+            "title": doc.title,
             "publication_year": doc.publication_year,
             "authors": doc.authors,
             "document_type": doc.document_type,
@@ -738,6 +755,7 @@ async def get_document(doc_id: int, db: Session = Depends(get_db)):
         "blacklisted": doc.blacklisted,
         "blacklisted_at": doc.blacklisted_at,
         "blacklist_reason": doc.blacklist_reason,
+        "title": doc.title,
         "publication_year": doc.publication_year,
         "authors": doc.authors,
         "document_type": doc.document_type,
@@ -789,6 +807,8 @@ async def update_document_metadata(
         metadata.authors = [a.strip() for a in metadata.authors if a.strip()]
 
     # Update fields that are provided (not None)
+    if metadata.title is not None:
+        doc.title = metadata.title.strip() if metadata.title.strip() else None
     if metadata.publication_year is not None:
         doc.publication_year = metadata.publication_year
     if metadata.authors is not None:
@@ -798,6 +818,19 @@ async def update_document_metadata(
 
     db.commit()
     db.refresh(doc)
+
+    # Rename archive file to match structured naming convention
+    first_author = doc.authors[0] if doc.authors else None
+    new_archive_path = _rename_archive_file(
+        doc,
+        first_author=first_author,
+        year=doc.publication_year,
+        title=doc.title,
+    )
+    if new_archive_path:
+        doc.archive_path = new_archive_path
+        db.commit()
+        db.refresh(doc)
 
     # Propagate metadata to vector store chunks
     vector_store.update_document_metadata(
@@ -821,6 +854,7 @@ async def update_document_metadata(
         "blacklisted": doc.blacklisted,
         "blacklisted_at": doc.blacklisted_at,
         "blacklist_reason": doc.blacklist_reason,
+        "title": doc.title,
         "publication_year": doc.publication_year,
         "authors": doc.authors,
         "document_type": doc.document_type,
@@ -910,9 +944,12 @@ async def download_archived_pdf(doc_id: int, db: Session = Depends(get_db)):
     if not doc.archive_path or not os.path.exists(doc.archive_path):
         raise HTTPException(status_code=404, detail="Archived file not found")
 
+    # Use the cleaned archive filename (already structured as author_year_title.pdf)
+    download_filename = os.path.basename(doc.archive_path)
+
     return FileResponse(
         path=doc.archive_path,
-        filename=doc.filename,
+        filename=download_filename,
         media_type="application/pdf",
     )
 
@@ -1134,13 +1171,19 @@ def _format_vector_search_results(
             if score_value is not None:
                 score_value = max(0.0, min(1.0, score_value))
 
+            # Build download URL with optional base URL prefix
+            download_url = None
+            if has_archive:
+                relative_path = f"/api/archive/{pdf_id}"
+                download_url = f"{BASE_URL}{relative_path}" if BASE_URL else relative_path
+
             result_item = {
                 "content": doc,
                 "page": page_num,
                 "relevance": score_value,
                 "pdf_id": pdf_id,
                 "filename": filename,
-                "download_url": f"/api/archive/{pdf_id}" if has_archive else None,
+                "download_url": download_url,
             }
             formatted_results.append(result_item)
     finally:

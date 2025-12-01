@@ -26,6 +26,7 @@ import { updateDocumentMetadata, DOCUMENT_TYPES } from '../api/documents';
 const MetadataEditor = ({ isOpen, onClose, document, onSave }) => {
   const toast = useToast();
   const [saving, setSaving] = useState(false);
+  const [title, setTitle] = useState('');
   const [publicationYear, setPublicationYear] = useState('');
   const [documentType, setDocumentType] = useState('');
   const [authors, setAuthors] = useState([]);
@@ -34,6 +35,7 @@ const MetadataEditor = ({ isOpen, onClose, document, onSave }) => {
   // Initialize form when document changes
   useEffect(() => {
     if (document) {
+      setTitle(document.title || '');
       setPublicationYear(document.publication_year || '');
       setDocumentType(document.document_type || '');
       setAuthors(document.authors || []);
@@ -70,6 +72,11 @@ const MetadataEditor = ({ isOpen, onClose, document, onSave }) => {
       };
 
       // Only include changed fields
+      const trimmedTitle = title.trim();
+      if (trimmedTitle !== (document.title || '')) {
+        payload.title = trimmedTitle || null;
+      }
+
       const year = publicationYear ? parseInt(publicationYear, 10) : null;
       if (year !== document.publication_year) {
         payload.publication_year = year;
@@ -121,6 +128,15 @@ const MetadataEditor = ({ isOpen, onClose, document, onSave }) => {
         <ModalCloseButton />
         <ModalBody>
           <Stack spacing={4}>
+            <FormControl>
+              <FormLabel>Title</FormLabel>
+              <Input
+                placeholder="Document title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+              />
+            </FormControl>
+
             <FormControl>
               <FormLabel>Publication Year</FormLabel>
               <Input

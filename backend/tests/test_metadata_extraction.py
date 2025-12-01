@@ -150,6 +150,7 @@ class TestDocumentMetadata:
     def test_to_dict(self):
         """Test conversion to dictionary."""
         metadata = DocumentMetadata(
+            title="Test Document Title",
             authors=["Author One", "Author Two"],
             publication_year=2024,
             document_type="paper",
@@ -158,6 +159,7 @@ class TestDocumentMetadata:
         result = metadata.to_dict()
 
         assert result == {
+            "title": "Test Document Title",
             "authors": ["Author One", "Author Two"],
             "publication_year": 2024,
             "document_type": "paper",
@@ -166,6 +168,7 @@ class TestDocumentMetadata:
     def test_to_dict_with_none_values(self):
         """Test conversion to dictionary with None values."""
         metadata = DocumentMetadata(
+            title=None,
             authors=[],
             publication_year=None,
             document_type=None,
@@ -174,6 +177,7 @@ class TestDocumentMetadata:
         result = metadata.to_dict()
 
         assert result == {
+            "title": None,
             "authors": [],
             "publication_year": None,
             "document_type": None,
