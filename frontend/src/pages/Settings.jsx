@@ -24,6 +24,7 @@ const Settings = () => {
   const [reparseInput, setReparseInput] = useState('');
   const [isReparseAllLoading, setIsReparseAllLoading] = useState(false);
   const [isReparseSelectedLoading, setIsReparseSelectedLoading] = useState(false);
+  const [config, setConfig] = useState(null);
   const toast = useToast();
 
   const loadBlacklist = async () => {
@@ -36,8 +37,18 @@ const Settings = () => {
     }
   };
 
+  const loadConfig = async () => {
+    try {
+      const resp = await axios.get('/api/config');
+      setConfig(resp.data);
+    } catch (err) {
+      console.error('Failed to load config', err);
+    }
+  };
+
   useEffect(() => {
     loadBlacklist();
+    loadConfig();
   }, []);
 
   const handleAdd = async () => {
@@ -124,6 +135,41 @@ const Settings = () => {
   return (
     <Box>
       <Heading size="md" mb={4}>Settings</Heading>
+
+      {config && (config.archive_dir || config.watch_dir) && (
+        <Box mb={6} p={4} bg="white" borderRadius="md" shadow="sm">
+          <Heading size="sm" mb={3}>Folder Configuration</Heading>
+          <Table size="sm" variant="simple">
+            <Tbody>
+              {config.archive_dir && (
+                <Tr>
+                  <Td fontWeight="medium" width="200px">Archive Folder</Td>
+                  <Td fontFamily="mono" fontSize="sm">{config.archive_dir}</Td>
+                </Tr>
+              )}
+              {config.watch_dir && (
+                <>
+                  <Tr>
+                    <Td fontWeight="medium">Auto Scan Folder</Td>
+                    <Td fontFamily="mono" fontSize="sm">{config.watch_dir}</Td>
+                  </Tr>
+                  <Tr>
+                    <Td fontWeight="medium">Scan Interval</Td>
+                    <Td>{config.watch_interval} seconds</Td>
+                  </Tr>
+                  <Tr>
+                    <Td fontWeight="medium">Max Workers</Td>
+                    <Td>{config.watch_max_workers}</Td>
+                  </Tr>
+                </>
+              )}
+            </Tbody>
+          </Table>
+          <Text fontSize="xs" color="gray.500" mt={3}>
+            These settings are configured via environment variables.
+          </Text>
+        </Box>
+      )}
 
       <Box mb={6} p={4} bg="white" borderRadius="md" shadow="sm">
         <Heading size="sm" mb={3}>Reprocess Documents</Heading>

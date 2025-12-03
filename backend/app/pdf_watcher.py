@@ -13,6 +13,7 @@ from typing import Dict, Optional, Set
 
 from sqlalchemy.orm import Session
 
+from app.archive_utils import copy_to_archive
 from app.database import PDFDocument, SessionLocal
 from app.pdf_processor import PDFProcessor, PROCESSING_STATUS
 from app.vector_store import VectorStore
@@ -167,6 +168,8 @@ class PDFDirectoryWatcher:
                     doc = existing
                 else:
                     logger.info("Detected new PDF %s, scheduling ingestion", display_name)
+                    # Copy to archive folder
+                    archive_path = copy_to_archive(absolute_path, os.path.basename(absolute_path))
                     doc = PDFDocument(
                         filename=display_name,
                         file_path=absolute_path,
@@ -174,6 +177,7 @@ class PDFDirectoryWatcher:
                         processed=False,
                         processing=True,
                         progress=0.0,
+                        archive_path=archive_path,
                     )
                     db.add(doc)
 

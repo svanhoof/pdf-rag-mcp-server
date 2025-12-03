@@ -134,6 +134,33 @@ def get_unique_archive_path(
         counter += 1
 
 
+def copy_to_archive(source_path: str, original_filename: str | None = None) -> str | None:
+    """Copy a file to the archive directory.
+
+    Args:
+        source_path: Path to the source file to archive.
+        original_filename: Optional filename to use for the archive (defaults to source basename).
+
+    Returns:
+        The archive path if successful, None if archiving failed.
+    """
+    if not os.path.exists(source_path):
+        logger.error("Cannot archive - source file does not exist: %s", source_path)
+        return None
+
+    filename = original_filename or os.path.basename(source_path)
+    archive_path = get_unique_archive_path(filename)
+
+    try:
+        os.makedirs(ARCHIVE_DIR, exist_ok=True)
+        shutil.copy2(source_path, archive_path)
+        logger.info("Archived %s to %s", filename, archive_path)
+        return archive_path
+    except Exception as exc:
+        logger.error("Failed to archive %s: %s", filename, exc)
+        return None
+
+
 def rename_archive_for_document(
     archive_path: str | None,
     filename: str,

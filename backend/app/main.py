@@ -566,7 +566,7 @@ async def not_found_handler(request, exc):
     return FileResponse("static/index.html")
 
 from app.archive_utils import (
-    get_unique_archive_path as _get_unique_archive_path,
+    copy_to_archive as _copy_to_archive,
     rename_archive_for_document as _rename_archive_file_impl,
 )
 
@@ -638,8 +638,7 @@ async def upload_pdf(
         file_size = len(file_content)
 
     # Copy to archive folder with original filename
-    archive_path = _get_unique_archive_path(file.filename)
-    shutil.copy2(file_path, archive_path)
+    archive_path = _copy_to_archive(file_path, file.filename)
 
     # Create database record
     pdf_doc = PDFDocument(
@@ -952,6 +951,17 @@ async def download_archived_pdf(doc_id: int, db: Session = Depends(get_db)):
         filename=download_filename,
         media_type="application/pdf",
     )
+
+
+@app.get("/api/config")
+async def get_config():
+    """Return server configuration settings for display in the UI."""
+    return {
+        "archive_dir": os.path.abspath(ARCHIVE_DIR) if ARCHIVE_DIR else None,
+        "watch_dir": os.path.abspath(watch_directory) if watch_directory else None,
+        "watch_interval": float(os.getenv("PDF_RAG_WATCH_INTERVAL", "5")) if watch_directory else None,
+        "watch_max_workers": int(os.getenv("PDF_RAG_WATCH_MAX_WORKERS", "1")) if watch_directory else None,
+    }
 
 
 @app.get("/api/connections")
@@ -1305,8 +1315,8 @@ async def query_knowledge_base(
 
     Optional filters:
 
-    - `publication_year`: Restrict results to documents published in a specific year.
-    - `year_start` / `year_end`: Restrict results to documents published within a year range (inclusive).
+    - `publication_year`: Restrict results to documents published in a specific year. Format as integer
+    - `year_start` / `year_end`: Restrict results to documents published within a year range (inclusive). Format as integer
     - `document_type`: Restrict results to documents of a single type.
     - `document_types`: Restrict results to documents matching any of the specified types (comma-separated).
     - `author`: Restrict results to documents where any author name contains the search string.
